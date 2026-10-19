@@ -37,21 +37,16 @@ public class DashboardController {
         long exceptions = all.stream().filter(e -> !"NORMAL".equals(e.getStatus())).count();
         long units = all.stream().map(ColdChainEvent::getUnitId).filter(Objects::nonNull).distinct().count();
 
-        String query = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
-        String statusFilter = status == null ? "" : status.trim().toUpperCase(Locale.ROOT);
+        String query = normalizeQuery(q);
+        String statusFilter = normalizeStatus(status);
 
         List<ColdChainEvent> filtered = all.stream()
-                .filter(e -> query.isEmpty()
-                        || safe(e.getUnitId()).contains(query)
-                        || safe(e.getLocation()).contains(query)
-                        || safe(e.getNotes()).contains(query))
-                .filter(e -> statusFilter.isEmpty() || "ALL".equals(statusFilter)
-                        || e.getStatus().equals(statusFilter))
+                .filter(e -> matchesFilters(e, query, statusFilter))
                 .collect(Collectors.toList());
 
         model.addAttribute("events", filtered);
         model.addAttribute("q", q == null ? "" : q);
-        model.addAttribute("statusFilter", status == null ? "" : status);
+        model.addAttribute("statusFilter", statusFilter.isEmpty() ? "ALL" : statusFilter);
         model.addAttribute("totalReadings", all.size());
         model.addAttribute("unitCount", units);
         model.addAttribute("normalCount", normal);
@@ -109,12 +104,10 @@ public class DashboardController {
     @ResponseBody
     public List<ColdChainEvent> apiEvents(@RequestParam(required = false) String q,
                                           @RequestParam(required = false) String status) {
-        String query = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
-        String statusFilter = status == null ? "" : status.trim().toUpperCase(Locale.ROOT);
+        String query = normalizeQuery(q);
+        String statusFilter = normalizeStatus(status);
         return repository.findAll().stream()
-                .filter(e -> query.isEmpty() || safe(e.getUnitId()).contains(query)
-                        || safe(e.getLocation()).contains(query))
-                .filter(e -> statusFilter.isEmpty() || e.getStatus().equals(statusFilter))
+                .filter(e -> matchesFilters(e, query, statusFilter))
                 .sorted(Comparator.comparing(ColdChainEvent::getRecordedAt,
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .collect(Collectors.toList());
@@ -146,5 +139,23 @@ public class DashboardController {
 
     private static String safe(String value) {
         return value == null ? "" : value.toLowerCase(Locale.ROOT);
+    }
+
+    private static String normalizeQuery(String query) {
+        return query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String normalizeStatus(String status) {
+        return status == null ? "" : status.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static boolean matchesFilters(ColdChainEvent event, String query, String status) {
+        boolean matchesQuery = query.isEmpty()
+                || safe(event.getUnitId()).contains(query)
+                || safe(event.getLocation()).contains(query)
+                || safe(event.getNotes()).contains(query);
+        boolean matchesStatus = status.isEmpty() || "ALL".equals(status)
+                || status.equals(event.getStatus());
+        return matchesQuery && matchesStatus;
     }
 }

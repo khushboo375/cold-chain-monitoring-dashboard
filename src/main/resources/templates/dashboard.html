@@ -31,9 +31,9 @@
     <section class="panel">
         <div class="section-heading"><div><h2>Temperature events</h2><p class="muted">Search by unit, location, or note; filter by status.</p></div><span class="count-pill" th:text="${events.size()} + ' shown'">0 shown</span></div>
         <form class="filters" method="get" th:action="@{/}">
-            <input type="search" name="q" placeholder="Search unit or location..." th:value="${q}" aria-label="Search events">
+            <input type="search" name="q" placeholder="Search unit, location, or note..." th:value="${q}" aria-label="Search events">
             <select name="status" aria-label="Filter by status">
-                <option value="" th:selected="${statusFilter == ''}">All statuses</option>
+                <option value="ALL" th:selected="${statusFilter == 'ALL'}">All statuses</option>
                 <option value="NORMAL" th:selected="${statusFilter == 'NORMAL'}">Normal</option>
                 <option value="HIGH" th:selected="${statusFilter == 'HIGH'}">High</option>
                 <option value="LOW" th:selected="${statusFilter == 'LOW'}">Low</option>
