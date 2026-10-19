@@ -1,0 +1,29 @@
+# Maven / Java
+target/
+*.class
+*.jar
+*.war
+
+# Local database files
+data/
+*.mv.db
+*.trace.db
+
+# Logs
+logs/
+*.log
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example

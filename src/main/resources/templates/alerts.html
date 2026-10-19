@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Alerts | ColdChain</title><link rel="stylesheet" th:href="@{/css/style.css}"></head>
+<body>
+<header class="topbar"><div class="brand"><span class="brand-mark">❄</span><div><strong>ColdChain</strong><small>Monitoring Dashboard</small></div></div><nav><a th:href="@{/}">Dashboard</a><a class="active" th:href="@{/alerts}">Alerts / Exceptions</a></nav><span class="environment">MVP · Demo data</span></header>
+<main class="container">
+    <section class="hero"><div><p class="eyebrow">EXCEPTION MANAGEMENT</p><h1>Alerts and exceptions</h1><p class="muted">Readings below or above their configured limits appear here.</p></div><a class="button button-light" th:href="@{/}">← Dashboard</a></section>
+    <section class="panel"><div class="section-heading"><div><h2>Out-of-range readings</h2><p class="muted">This prototype flags exceptions; it does not send real-time notifications.</p></div><span class="count-pill" th:text="${events.size()} + ' alerts'">0 alerts</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Unit ID</th><th>Location</th><th>Temperature</th><th>Allowed range</th><th>Status</th><th>Notes</th><th></th></tr></thead>
+        <tbody><tr th:each="event : ${events}"><td class="unit" th:text="${event.unitId}">VAX-002</td><td th:text="${event.location}">Location</td><td class="temperature" th:text="${event.temperatureC} + ' °C'">9.1 °C</td><td th:text="${event.minTempC + ' to ' + event.maxTempC + ' °C'}">2 to 8 °C</td><td><span class="status" th:classappend="${event.status == 'HIGH' ? ' status-high' : ' status-low'}" th:text="${event.status}">HIGH</span></td><td th:text="${event.notes}">Notes</td><td><a class="text-link" th:href="@{/events/{id}(id=${event.id})}">Details →</a></td></tr>
+        <tr th:if="${#lists.isEmpty(events)}"><td colspan="7" class="empty">No exceptions found.</td></tr></tbody></table></div>
+    </section>
+</main></body></html>

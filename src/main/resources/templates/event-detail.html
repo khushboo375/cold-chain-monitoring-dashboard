@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Event details | ColdChain</title><link rel="stylesheet" th:href="@{/css/style.css}"></head>
+<body>
+<header class="topbar"><div class="brand"><span class="brand-mark">❄</span><div><strong>ColdChain</strong><small>Monitoring Dashboard</small></div></div><nav><a th:href="@{/}">Dashboard</a><a th:href="@{/alerts}">Alerts / Exceptions</a></nav><span class="environment">MVP · Demo data</span></header>
+<main class="container narrow">
+    <a class="back-link" th:href="@{/}">← Back to dashboard</a>
+    <section class="panel detail-panel">
+        <p class="eyebrow">EVENT DETAILS</p><h1 th:text="${event.unitId}">VAX-001</h1>
+        <p class="muted" th:text="${event.location}">Location</p>
+        <div class="detail-temperature" th:text="${event.temperatureC} + ' °C'">4.2 °C</div>
+        <span class="status" th:classappend="${event.status == 'NORMAL' ? ' status-normal' : (event.status == 'HIGH' ? ' status-high' : ' status-low')}" th:text="${event.status}">NORMAL</span>
+        <dl class="details">
+            <dt>Event ID</dt><dd th:text="${event.id}">1</dd>
+            <dt>Minimum temperature</dt><dd th:text="${event.minTempC} + ' °C'">2 °C</dd>
+            <dt>Maximum temperature</dt><dd th:text="${event.maxTempC} + ' °C'">8 °C</dd>
+            <dt>Recorded at</dt><dd th:text="${#temporals.format(event.recordedAt, 'yyyy-MM-dd HH:mm:ss')}">Date</dd>
+            <dt>Notes</dt><dd th:text="${event.notes == null or event.notes.isBlank() ? 'No notes provided' : event.notes}">Notes</dd>
+        </dl>
+    </section>
+</main>
+</body></html>
