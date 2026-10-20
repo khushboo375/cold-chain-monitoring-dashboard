@@ -5,48 +5,46 @@ $workspace = $env:WORKSPACE
 $deployDir = Join-Path $workspace "deploy"
 $sourceJar = Join-Path $workspace "target\cold-chain-dashboard.jar"
 $targetJar = Join-Path $deployDir "cold-chain-dashboard.jar"
-$javaExe = "C:\DevTools\jdk-21.0.12\bin\java.exe"
+$taskName = "ColdChainDashboard"
 $port = 8090
-
-$stdoutLog = Join-Path $deployDir "app.log"
-$stderrLog = Join-Path $deployDir "app-error.log"
-$pidFile = Join-Path $deployDir "app.pid"
 
 if (-not (Test-Path $sourceJar)) {
     throw "Build JAR not found: $sourceJar"
 }
 
-if (-not (Test-Path $javaExe)) {
-    throw "Java executable not found: $javaExe"
+if (-not (Test-Path $deployDir)) {
+    New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
 }
 
-New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
+# Stop the previous scheduled task instance.
+$task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
 
-# Stop the previous deployment, if its PID file identifies a process
-# running this exact application JAR.
-if (Test-Path $pidFile) {
-    $oldPidText = (Get-Content $pidFile -Raw).Trim()
-    $oldPid = 0
+if ($task.State -eq "Running") {
+    Stop-ScheduledTask -TaskName $taskName
 
-    if ([int]::TryParse($oldPidText, [ref]$oldPid)) {
-        $oldProcess = Get-CimInstance Win32_Process `
-            -Filter "ProcessId = $oldPid" `
-            -ErrorAction SilentlyContinue
+    for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep -Seconds 1
+        $task = Get-ScheduledTask -TaskName $taskName
 
-        if (
-            $oldProcess -and
-            $oldProcess.Name -eq "java.exe" -and
-            $oldProcess.CommandLine -like "*-jar cold-chain-dashboard.jar*"
-        ) {
-            Write-Host "Stopping previous deployment PID $oldPid..."
-            Stop-Process -Id $oldPid -Force
+        if ($task.State -ne "Running") {
+            break
         }
     }
-
-    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
 }
 
-# Wait for the old application to release the port.
+# Stop only a Java process running this dashboard JAR.
+$javaProcesses = Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.Name -eq "java.exe" -and
+        $_.CommandLine -like "*-jar cold-chain-dashboard.jar*"
+    }
+
+foreach ($process in $javaProcesses) {
+    Write-Host "Stopping previous dashboard process PID $($process.ProcessId)..."
+    Stop-Process -Id $process.ProcessId -Force
+}
+
+# Wait for port 8090 to be released.
 $portFree = $false
 
 for ($i = 0; $i -lt 30; $i++) {
@@ -64,42 +62,22 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 
 if (-not $portFree) {
-    throw "Port $port is still in use. The existing listener was not stopped."
+    throw "Port $port is still in use. Deployment stopped safely."
 }
 
-# Install the new artifact.
+# Copy the new build artifact.
 Copy-Item -Path $sourceJar -Destination $targetJar -Force
 Write-Host "Updated deployment JAR."
 
-# Clear old logs so this deployment's startup output is easy to inspect.
-Set-Content -Path $stdoutLog -Value ""
-Set-Content -Path $stderrLog -Value ""
+# Start the application using the working scheduled task.
+Write-Host "Starting scheduled task: $taskName"
+Start-ScheduledTask -TaskName $taskName
 
-# Launch Java independently of the Jenkins build process.
-$javaProcess = Start-Process `
-    -FilePath $javaExe `
-    -ArgumentList @("-jar", "`"$targetJar`"", "--server.port=$port") `
-    -WorkingDirectory $deployDir `
-    -RedirectStandardOutput $stdoutLog `
-    -RedirectStandardError $stderrLog `
-    -PassThru
-
-Set-Content -Path $pidFile -Value $javaProcess.Id
-Write-Host "Started Java process PID $($javaProcess.Id)."
-
-# Verify health for up to 90 seconds.
+# Wait for the health endpoint.
 $healthy = $false
 
 for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 3
-
-    $javaProcess.Refresh()
-
-    if ($javaProcess.HasExited) {
-        Get-Content $stderrLog -ErrorAction SilentlyContinue
-        Get-Content $stdoutLog -ErrorAction SilentlyContinue
-        throw "Java exited with code $($javaProcess.ExitCode). Check app-error.log and app.log."
-    }
 
     try {
         $response = Invoke-RestMethod `
@@ -117,12 +95,8 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 
 if (-not $healthy) {
-    Write-Host "Application startup logs:"
-    Get-Content $stdoutLog -ErrorAction SilentlyContinue -Tail 60
-    Get-Content $stderrLog -ErrorAction SilentlyContinue -Tail 60
-    throw "Deployment health check failed on port $port."
+    throw "Deployment health check failed on port $port. Check Task Scheduler history and application logs."
 }
 
 Write-Host "Deployment successful!"
 Write-Host "Health endpoint: http://localhost:$port/health"
-Write-Host "Application log: $stdoutLog"
