@@ -38,18 +38,13 @@ pipeline {
         }
 
         
+        
         stage('Deploy Application') {
             steps {
-                bat '''
-                    @echo off
-                    if not exist deploy mkdir deploy
-                    copy /Y target\\cold-chain-dashboard.jar deploy\\cold-chain-dashboard.jar
-                    if errorlevel 1 exit /b 1
-                '''
-
                 bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\deploy.ps1'
             }
         }
+
 
     }
 

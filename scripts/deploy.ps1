@@ -1,66 +1,80 @@
 
 $ErrorActionPreference = "Stop"
 
-$deployDir = Join-Path $env:WORKSPACE "deploy"
-$jarPath = Join-Path $deployDir "cold-chain-dashboard.jar"
-$pidFile = Join-Path $deployDir "app.pid"
-$stdoutLog = Join-Path $deployDir "app.log"
-$stderrLog = Join-Path $deployDir "app-error.log"
+$workspace = $env:WORKSPACE
+$deployDir = Join-Path $workspace "deploy"
+$sourceJar = Join-Path $workspace "target\cold-chain-dashboard.jar"
+$targetJar = Join-Path $deployDir "cold-chain-dashboard.jar"
+$taskName = "ColdChainDashboard"
 $port = 8090
 
-if (-not (Test-Path $jarPath)) {
-    throw "Deployment JAR not found: $jarPath"
+if (-not (Test-Path $sourceJar)) {
+    throw "Build JAR not found: $sourceJar"
 }
 
-# Stop only the instance previously started by this script.
-if (Test-Path $pidFile) {
-    $oldPidText = Get-Content $pidFile -Raw
-    $oldPid = 0
+if (-not (Test-Path $deployDir)) {
+    New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
+}
 
-    if ([int]::TryParse($oldPidText.Trim(), [ref]$oldPid)) {
-        $oldProcess = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+$task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
 
-        if ($oldProcess -and $oldProcess.ProcessName -eq "java") {
-            Stop-Process -Id $oldPid -Force
-            Start-Sleep -Seconds 2
+# Stop the previous deployed instance before replacing its JAR.
+if ($task.State -eq "Running") {
+    Write-Host "Stopping previous dashboard deployment..."
+    Stop-ScheduledTask -TaskName $taskName
+
+    $stopped = $false
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Seconds 1
+        $task = Get-ScheduledTask -TaskName $taskName
+
+        if ($task.State -ne "Running") {
+            $stopped = $true
+            break
         }
     }
 
-    Remove-Item $pidFile -Force
+    if (-not $stopped) {
+        throw "Previous scheduled task did not stop."
+    }
 }
 
-$javaPath = Join-Path $env:JAVA_HOME "bin\java.exe"
+# Wait for port 8090 to become free.
+for ($i = 0; $i -lt 20; $i++) {
+    $listener = Get-NetTCPConnection `
+        -LocalPort $port `
+        -State Listen `
+        -ErrorAction SilentlyContinue
 
-if (-not (Test-Path $javaPath)) {
-    throw "Java executable not found: $javaPath"
+    if (-not $listener) {
+        break
+    }
+
+    Start-Sleep -Seconds 1
 }
 
-Write-Host "Starting Cold Chain Dashboard on port $port..."
+$listener = Get-NetTCPConnection `
+    -LocalPort $port `
+    -State Listen `
+    -ErrorAction SilentlyContinue
 
-$arguments = "-jar `"$jarPath`" --server.port=$port"
+if ($listener) {
+    throw "Port $port is still in use. Deployment stopped safely."
+}
 
-$app = Start-Process `
-    -FilePath $javaPath `
-    -ArgumentList $arguments `
-    -WorkingDirectory $deployDir `
-    -RedirectStandardOutput $stdoutLog `
-    -RedirectStandardError $stderrLog `
-    -PassThru
+# Copy the newly built artifact after stopping the old instance.
+Copy-Item -Path $sourceJar -Destination $targetJar -Force
+Write-Host "Updated deployment JAR."
 
-Set-Content -Path $pidFile -Value $app.Id
+# Launch the application independently through Windows Task Scheduler.
+Write-Host "Starting scheduled task: $taskName"
+Start-ScheduledTask -TaskName $taskName
 
 # Wait up to 90 seconds for the health endpoint.
 $healthy = $false
 
 for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 3
-
-    $app.Refresh()
-
-    if ($app.HasExited) {
-        Write-Host "Application process exited unexpectedly."
-        break
-    }
 
     try {
         $response = Invoke-RestMethod `
@@ -80,14 +94,5 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 
 if (-not $healthy) {
-    Write-Host "Application logs:"
-    if (Test-Path $stdoutLog) {
-        Get-Content $stdoutLog -Tail 40
-    }
-
-    if (Test-Path $stderrLog) {
-        Get-Content $stderrLog -Tail 40
-    }
-
-    throw "Deployment health check failed on port $port."
+    throw "Deployment health check failed on port $port. Check the scheduled task and application logs."
 }
