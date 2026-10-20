@@ -57,6 +57,13 @@ public class ColdChainEvent {
         return "NORMAL";
     }
 
+    @Transient
+    public Double getDeviationC() {
+        if ("HIGH".equals(getStatus())) return temperatureC - maxTempC;
+        if ("LOW".equals(getStatus())) return minTempC - temperatureC;
+        return null;
+    }
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
     public String getUnitId() { return unitId; }

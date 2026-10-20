@@ -74,6 +74,17 @@ class ColdChainDashboardApplicationTests {
                 .andExpect(jsonPath("$[0].unitId").value("VAX-003"));
     }
 
+    @Test
+    void alertsShowAllowedBoundsAndCorrectHighAndLowDeviations() throws Exception {
+        mockMvc.perform(get("/alerts"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Allowed minimum")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Allowed maximum")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("1.0 °C")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("VAX-002")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("VAX-003")));
+    }
+
     private static ColdChainEvent event(String unitId, String location, double temperature, String notes) {
         ColdChainEvent event = new ColdChainEvent();
         event.setUnitId(unitId);
