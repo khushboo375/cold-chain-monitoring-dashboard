@@ -12,6 +12,11 @@ pipeline {
         disableConcurrentBuilds()
     }
 
+    environment {
+        APP_PORT = '8090'
+        APP_NAME = 'cold-chain-dashboard'
+    }
+
     stages {
         stage('Checkout') {
             steps {
@@ -31,11 +36,22 @@ pipeline {
                                  fingerprint: true
             }
         }
+
+        stage('Deploy Application') {
+            steps {
+                bat '''
+                    @echo off
+                    if not exist deploy mkdir deploy
+                    copy /Y target\\*.jar deploy\\cold-chain-dashboard.jar
+                    if errorlevel 1 exit /b 1
+                '''
+            }
+        }
     }
 
     post {
         success {
-            echo 'Cold Chain Dashboard pipeline completed successfully.'
+            echo 'Build, test, artifact archiving, and deployment preparation succeeded.'
         }
         failure {
             echo 'Pipeline failed. Check the console output.'
