@@ -16,61 +16,55 @@ if (-not (Test-Path $deployDir)) {
     New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
 }
 
+# Stop the scheduled task if it is running.
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
 
-# Stop the previous deployed instance before replacing its JAR.
 if ($task.State -eq "Running") {
-    Write-Host "Stopping previous dashboard deployment..."
     Stop-ScheduledTask -TaskName $taskName
+}
 
-    $stopped = $false
-    for ($i = 0; $i -lt 20; $i++) {
-        Start-Sleep -Seconds 1
-        $task = Get-ScheduledTask -TaskName $taskName
-
-        if ($task.State -ne "Running") {
-            $stopped = $true
-            break
-        }
+# Find and stop only the Java process running our dashboard JAR.
+$javaProcesses = Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.Name -eq "java.exe" -and
+        $_.CommandLine -like "*-jar cold-chain-dashboard.jar*"
     }
 
-    if (-not $stopped) {
-        throw "Previous scheduled task did not stop."
-    }
+foreach ($process in $javaProcesses) {
+    Write-Host "Stopping previous dashboard process PID $($process.ProcessId)..."
+    Stop-Process -Id $process.ProcessId -Force
 }
 
 # Wait for port 8090 to become free.
-for ($i = 0; $i -lt 20; $i++) {
+$portFree = $false
+
+for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Seconds 1
+
     $listener = Get-NetTCPConnection `
         -LocalPort $port `
         -State Listen `
         -ErrorAction SilentlyContinue
 
     if (-not $listener) {
+        $portFree = $true
         break
     }
-
-    Start-Sleep -Seconds 1
 }
 
-$listener = Get-NetTCPConnection `
-    -LocalPort $port `
-    -State Listen `
-    -ErrorAction SilentlyContinue
-
-if ($listener) {
-    throw "Port $port is still in use. Deployment stopped safely."
+if (-not $portFree) {
+    throw "Port $port is still in use. Check the process listening on that port."
 }
 
-# Copy the newly built artifact after stopping the old instance.
+# Deploy the newly built JAR.
 Copy-Item -Path $sourceJar -Destination $targetJar -Force
 Write-Host "Updated deployment JAR."
 
-# Launch the application independently through Windows Task Scheduler.
+# Start the application independently of the Jenkins process.
 Write-Host "Starting scheduled task: $taskName"
 Start-ScheduledTask -TaskName $taskName
 
-# Wait up to 90 seconds for the health endpoint.
+# Verify application health for up to 90 seconds.
 $healthy = $false
 
 for ($i = 0; $i -lt 30; $i++) {
@@ -89,10 +83,10 @@ for ($i = 0; $i -lt 30; $i++) {
         }
     }
     catch {
-        # The application may still be starting.
+        # Wait while Spring Boot starts.
     }
 }
 
 if (-not $healthy) {
-    throw "Deployment health check failed on port $port. Check the scheduled task and application logs."
+    throw "Deployment health check failed on port $port."
 }
