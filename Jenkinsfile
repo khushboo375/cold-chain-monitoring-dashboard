@@ -13,9 +13,11 @@ pipeline {
     }
 
     environment {
-        APP_PORT = '8090'
         TEST_PORT = '8091'
+        DEPLOY_PORT = '8092'
         APP_NAME = 'cold-chain-dashboard'
+        DOCKER_IMAGE = 'khushboo375/cold-chain-dashboard'
+        CONTAINER_NAME = 'cold-chain-container'
     }
 
     stages {
@@ -36,82 +38,74 @@ pipeline {
             }
         }
 
-        
-stage('Start Test Application') {
-    steps {
-        powershell '''
-            $ErrorActionPreference = "Stop"
+        stage('Start Test Application') {
+            steps {
+                powershell '''
+                    $ErrorActionPreference = "Stop"
 
-            $jar = Join-Path $env:WORKSPACE "target\\cold-chain-dashboard.jar"
-            $outLog = Join-Path $env:WORKSPACE "target\\selenium-app-out.log"
-            $errLog = Join-Path $env:WORKSPACE "target\\selenium-app-err.log"
-            $pidFile = Join-Path $env:WORKSPACE "target\\selenium-app.pid"
+                    $jar = Join-Path $env:WORKSPACE "target\\cold-chain-dashboard.jar"
+                    $outLog = Join-Path $env:WORKSPACE "target\\selenium-app-out.log"
+                    $errLog = Join-Path $env:WORKSPACE "target\\selenium-app-err.log"
+                    $java = Join-Path $env:JAVA_HOME "bin\\java.exe"
 
-            if (-not (Test-Path $jar)) {
-                throw "Application JAR not found: $jar"
-            }
-
-            $java = Join-Path $env:JAVA_HOME "bin\\java.exe"
-
-            if (-not (Test-Path $java)) {
-                throw "Java executable not found: $java"
-            }
-
-            $listener = Get-NetTCPConnection `
-                -LocalPort 8091 -State Listen `
-                -ErrorAction SilentlyContinue
-
-            if ($listener) {
-                throw "Port 8091 is already in use."
-            }
-
-            Remove-Item $outLog, $errLog, $pidFile `
-                -Force -ErrorAction SilentlyContinue
-
-            $command = '"' + $java + '" -jar "' + $jar +
-                '" --server.port=8091 1>"' + $outLog +
-                '" 2>"' + $errLog + '"'
-
-            $process = Start-Process `
-                -FilePath $env:ComSpec `
-                -ArgumentList @('/d', '/s', '/c', "start `"`" /b $command") `
-                -WorkingDirectory $env:WORKSPACE `
-                -PassThru
-
-            $healthy = $false
-
-            for ($i = 0; $i -lt 40; $i++) {
-                Start-Sleep -Seconds 3
-
-                try {
-                    $response = Invoke-RestMethod `
-                        -Uri "http://localhost:8091/health" `
-                        -TimeoutSec 3
-
-                    if ($response.status -eq "UP") {
-                        $healthy = $true
-                        break
+                    if (-not (Test-Path $jar)) {
+                        throw "Application JAR not found: $jar"
                     }
-                }
-                catch {
-                    # Keep waiting while Spring Boot starts.
-                }
+
+                    if (-not (Test-Path $java)) {
+                        throw "Java executable not found: $java"
+                    }
+
+                    $listener = Get-NetTCPConnection `
+                        -LocalPort 8091 -State Listen `
+                        -ErrorAction SilentlyContinue
+
+                    if ($listener) {
+                        throw "Port 8091 is already in use."
+                    }
+
+                    Remove-Item $outLog, $errLog `
+                        -Force -ErrorAction SilentlyContinue
+
+                    $command = '"' + $java + '" -jar "' + $jar +
+                        '" --server.port=8091 1>"' + $outLog +
+                        '" 2>"' + $errLog + '"'
+
+                    Start-Process `
+                        -FilePath $env:ComSpec `
+                        -ArgumentList @('/d', '/s', '/c', "start `"`" /b $command") `
+                        -WorkingDirectory $env:WORKSPACE
+
+                    $healthy = $false
+
+                    for ($i = 0; $i -lt 40; $i++) {
+                        Start-Sleep -Seconds 3
+
+                        try {
+                            $response = Invoke-RestMethod `
+                                -Uri "http://localhost:8091/health" `
+                                -TimeoutSec 3
+
+                            if ($response.status -eq "UP") {
+                                $healthy = $true
+                                break
+                            }
+                        }
+                        catch {
+                            # Keep waiting for Spring Boot.
+                        }
+                    }
+
+                    if (-not $healthy) {
+                        Get-Content $outLog -ErrorAction SilentlyContinue
+                        Get-Content $errLog -ErrorAction SilentlyContinue
+                        throw "Test application did not become healthy."
+                    }
+
+                    Write-Host "Test application is healthy on port 8091."
+                '''
             }
-
-            if (-not $healthy) {
-                Write-Host "=== Application output ==="
-                Get-Content $outLog -ErrorAction SilentlyContinue
-                Write-Host "=== Application errors ==="
-                Get-Content $errLog -ErrorAction SilentlyContinue
-                throw "Test application did not become healthy on port 8091."
-            }
-
-            Write-Host "Test application is healthy on port 8091."
-            exit 0
-        '''
-    }
-}
-
+        }
 
         stage('Selenium Continuous Tests') {
             steps {
@@ -119,44 +113,133 @@ stage('Start Test Application') {
             }
         }
 
-        stage('Deploy Application') {
+        stage('Build Docker Image') {
             steps {
-                bat 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\deploy.ps1'
+                powershell '''
+                    $ErrorActionPreference = "Stop"
+
+                    docker build `
+                        -t "$env:DOCKER_IMAGE`:$env:BUILD_NUMBER" `
+                        -t "$env:DOCKER_IMAGE`:latest" .
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Docker image build failed."
+                    }
+
+                    docker image inspect "$env:DOCKER_IMAGE`:$env:BUILD_NUMBER"
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Versioned Docker image was not created."
+                    }
+                '''
+            }
+        }
+
+        stage('Push Image to Docker Hub') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKERHUB_USER',
+                        passwordVariable: 'DOCKERHUB_TOKEN'
+                    )
+                ]) {
+                    powershell '''
+                        $ErrorActionPreference = "Stop"
+
+                        $env:DOCKERHUB_TOKEN |
+                            docker login --username $env:DOCKERHUB_USER --password-stdin
+
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Docker Hub login failed."
+                        }
+
+                        docker push "$env:DOCKER_IMAGE`:$env:BUILD_NUMBER"
+
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Pushing the versioned image failed."
+                        }
+
+                        docker push "$env:DOCKER_IMAGE`:latest"
+
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Pushing the latest image failed."
+                        }
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy Docker Container') {
+            steps {
+                powershell '''
+                    $ErrorActionPreference = "Stop"
+
+                    $image = "$env:DOCKER_IMAGE`:$env:BUILD_NUMBER"
+
+                    # Download the exact version that was pushed.
+                    docker pull $image
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Could not pull image $image."
+                    }
+
+                    # Replace the previous deployment, if present.
+                    docker rm -f $env:CONTAINER_NAME 2>$null
+                    $global:LASTEXITCODE = 0
+
+                    docker run -d `
+                        --name $env:CONTAINER_NAME `
+                        --restart unless-stopped `
+                        -p 8092:8080 `
+                        $image
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Docker container failed to start."
+                    }
+
+                    $healthy = $false
+
+                    for ($i = 0; $i -lt 40; $i++) {
+                        Start-Sleep -Seconds 3
+
+                        try {
+                            $response = Invoke-RestMethod `
+                                -Uri "http://localhost:8092/health" `
+                                -TimeoutSec 3
+
+                            if ($response.status -eq "UP") {
+                                $healthy = $true
+                                break
+                            }
+                        }
+                        catch {
+                            # Keep waiting for the container.
+                        }
+                    }
+
+                    if (-not $healthy) {
+                        docker logs $env:CONTAINER_NAME
+                        throw "Deployment health check failed on port 8092."
+                    }
+
+                    Write-Host "Deployment successful!"
+                    Write-Host "Image: $image"
+                    Write-Host "Application: http://localhost:8092"
+                    docker ps --filter "name=$env:CONTAINER_NAME"
+                '''
             }
         }
     }
 
     post {
         always {
-            // Stop the temporary test application first.
-            powershell returnStatus: true, script: '''
-                $pidFile = Join-Path $env:WORKSPACE "target\\selenium-app.pid"
-
-                if (Test-Path $pidFile) {
-                    $appPid = (Get-Content $pidFile -Raw).Trim()
-
-                    if ($appPid -match '^\\d+$') {
-                        $process = Get-Process `
-                            -Id ([int]$appPid) `
-                            -ErrorAction SilentlyContinue
-
-                        if ($process) {
-                            Stop-Process -Id ([int]$appPid) -Force
-                            Write-Host "Stopped temporary Selenium test application."
-                        }
-                    }
-
-                    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
-                }
-            '''
-
-            // Publish test results even if the Selenium stage fails.
+            // Preserve test results and evidence.
             junit(
                 testResults: 'target/surefire-reports/TEST-*.xml',
                 allowEmptyResults: true
             )
 
-            // Preserve reports, screenshots and application logs as evidence.
             archiveArtifacts(
                 artifacts: 'target/surefire-reports/**,target/selenium-screenshots/**,target/selenium-app-*.log',
                 allowEmptyArchive: true,
@@ -165,7 +248,7 @@ stage('Start Test Application') {
         }
 
         success {
-            echo 'Build, Selenium tests, report publishing, and deployment succeeded.'
+            echo 'Build, Selenium tests, Docker image publishing, and container deployment succeeded.'
         }
 
         failure {
