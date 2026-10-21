@@ -37,90 +37,80 @@ pipeline {
         }
 
         
-        
-        stage('Start Test Application') {
-            steps {
-                powershell '''
-                    $ErrorActionPreference = "Stop"
+stage('Start Test Application') {
+    steps {
+        powershell '''
+            $ErrorActionPreference = "Stop"
 
-                    $jar = Join-Path $env:WORKSPACE "target\\cold-chain-dashboard.jar"
-                    $outLog = Join-Path $env:WORKSPACE "target\\selenium-app-out.log"
-                    $errLog = Join-Path $env:WORKSPACE "target\\selenium-app-err.log"
-                    $pidFile = Join-Path $env:WORKSPACE "target\\selenium-app.pid"
+            $jar = Join-Path $env:WORKSPACE "target\\cold-chain-dashboard.jar"
+            $outLog = Join-Path $env:WORKSPACE "target\\selenium-app-out.log"
+            $errLog = Join-Path $env:WORKSPACE "target\\selenium-app-err.log"
+            $pidFile = Join-Path $env:WORKSPACE "target\\selenium-app.pid"
 
-                    if (-not (Test-Path $jar)) {
-                        throw "Application JAR not found: $jar"
-                    }
-
-                    $java = Join-Path $env:JAVA_HOME "bin\\java.exe"
-                    if (-not (Test-Path $java)) {
-                        throw "Java executable not found: $java"
-                    }
-
-                    $existing = Get-NetTCPConnection `
-                        -LocalPort 8091 -State Listen `
-                        -ErrorAction SilentlyContinue
-
-                    if ($existing) {
-                        throw "Port 8091 is already in use. Stop the existing process first."
-                    }
-
-                    Remove-Item $outLog, $errLog -Force -ErrorAction SilentlyContinue
-
-                    $process = Start-Process `
-                        -FilePath $java `
-                        -ArgumentList @("-jar", "`"$jar`"", "--server.port=8091") `
-                        -WorkingDirectory $env:WORKSPACE `
-                        -RedirectStandardOutput $outLog `
-                        -RedirectStandardError $errLog `
-                        -PassThru
-
-                    Set-Content -Path $pidFile -Value $process.Id
-
-                    $healthy = $false
-
-                    for ($i = 0; $i -lt 40; $i++) {
-                        Start-Sleep -Seconds 3
-                        $process.Refresh()
-
-                        if ($process.HasExited) {
-                            break
-                        }
-
-                        try {
-                            $response = Invoke-RestMethod `
-                                -Uri "http://localhost:8091/health" `
-                                -TimeoutSec 3
-
-                            if ($response.status -eq "UP") {
-                                $healthy = $true
-                                break
-                            }
-                        }
-                        catch {
-                            # Continue while the application starts.
-                        }
-                    }
-
-                    if (-not $healthy) {
-                        Write-Host "=== Application standard output ==="
-                        Get-Content $outLog -ErrorAction SilentlyContinue
-
-                        Write-Host "=== Application standard error ==="
-                        Get-Content $errLog -ErrorAction SilentlyContinue
-
-                        if (-not $process.HasExited) {
-                            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                        }
-
-                        throw "Test application did not become healthy on port 8091."
-                    }
-
-                    Write-Host "Test application is healthy on port 8091."
-                '''
+            if (-not (Test-Path $jar)) {
+                throw "Application JAR not found: $jar"
             }
-        }
 
+            $java = Join-Path $env:JAVA_HOME "bin\\java.exe"
+
+            if (-not (Test-Path $java)) {
+                throw "Java executable not found: $java"
+            }
+
+            $listener = Get-NetTCPConnection `
+                -LocalPort 8091 -State Listen `
+                -ErrorAction SilentlyContinue
+
+            if ($listener) {
+                throw "Port 8091 is already in use."
+            }
+
+            Remove-Item $outLog, $errLog, $pidFile `
+                -Force -ErrorAction SilentlyContinue
+
+            $command = '"' + $java + '" -jar "' + $jar +
+                '" --server.port=8091 1>"' + $outLog +
+                '" 2>"' + $errLog + '"'
+
+            $process = Start-Process `
+                -FilePath $env:ComSpec `
+                -ArgumentList @('/d', '/s', '/c', "start `"`" /b $command") `
+                -WorkingDirectory $env:WORKSPACE `
+                -PassThru
+
+            $healthy = $false
+
+            for ($i = 0; $i -lt 40; $i++) {
+                Start-Sleep -Seconds 3
+
+                try {
+                    $response = Invoke-RestMethod `
+                        -Uri "http://localhost:8091/health" `
+                        -TimeoutSec 3
+
+                    if ($response.status -eq "UP") {
+                        $healthy = $true
+                        break
+                    }
+                }
+                catch {
+                    # Keep waiting while Spring Boot starts.
+                }
+            }
+
+            if (-not $healthy) {
+                Write-Host "=== Application output ==="
+                Get-Content $outLog -ErrorAction SilentlyContinue
+                Write-Host "=== Application errors ==="
+                Get-Content $errLog -ErrorAction SilentlyContinue
+                throw "Test application did not become healthy on port 8091."
+            }
+
+            Write-Host "Test application is healthy on port 8091."
+            exit 0
+        '''
+    }
+}
 
 
         stage('Selenium Continuous Tests') {
