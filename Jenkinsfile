@@ -113,11 +113,11 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
-            
         stage('Test Docker from Jenkins') {
             steps {
                 powershell '''
+                    $ErrorActionPreference = "Stop"
+
                     Write-Host "===== Windows account ====="
                     whoami
 
@@ -131,6 +131,10 @@ pipeline {
                     Write-Host "===== Docker contexts ====="
                     docker context ls
 
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Jenkins cannot list Docker contexts."
+                    }
+
                     Write-Host "===== Buildx builders ====="
                     docker buildx ls
 
@@ -140,9 +144,16 @@ pipeline {
 
                     Write-Host "===== Test image build ====="
                     docker build -t coldchain-jenkins-test .
-                    
+
                     if ($LASTEXITCODE -ne 0) {
                         throw "Jenkins could not build a test Docker image."
+                    }
+
+                    Write-Host "===== Test image created ====="
+                    docker image inspect coldchain-jenkins-test
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Jenkins cannot inspect the test image."
                     }
 
                     Write-Host "Docker test passed."
@@ -150,6 +161,7 @@ pipeline {
             }
         }
 
+        stage('Build Docker Image') {
             steps {
                 powershell '''
                     $ErrorActionPreference = "Stop"
@@ -213,14 +225,12 @@ pipeline {
 
                     $image = "$env:DOCKER_IMAGE`:$env:BUILD_NUMBER"
 
-                    # Download the exact version that was pushed.
                     docker pull $image
 
                     if ($LASTEXITCODE -ne 0) {
                         throw "Could not pull image $image."
                     }
 
-                    # Replace the previous deployment, if present.
                     docker rm -f $env:CONTAINER_NAME 2>$null
                     $global:LASTEXITCODE = 0
 
@@ -262,6 +272,7 @@ pipeline {
                     Write-Host "Deployment successful!"
                     Write-Host "Image: $image"
                     Write-Host "Application: http://localhost:8092"
+
                     docker ps --filter "name=$env:CONTAINER_NAME"
                 '''
             }
