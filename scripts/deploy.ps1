@@ -2,41 +2,31 @@
 $ErrorActionPreference = "Stop"
 
 $workspace = $env:WORKSPACE
+if ([string]::IsNullOrWhiteSpace($workspace)) {
+    throw "WORKSPACE environment variable is not set."
+}
+
 $deployDir = Join-Path $workspace "deploy"
 $sourceJar = Join-Path $workspace "target\cold-chain-dashboard.jar"
 $targetJar = Join-Path $deployDir "cold-chain-dashboard.jar"
-$taskName = "ColdChainDashboard"
+$javaExe = "C:\DevTools\jdk-21.0.12\bin\java.exe"
 $port = 8090
 
 if (-not (Test-Path $sourceJar)) {
     throw "Build JAR not found: $sourceJar"
 }
-
+if (-not (Test-Path $javaExe)) {
+    throw "Java executable not found: $javaExe"
+}
 if (-not (Test-Path $deployDir)) {
     New-Item -ItemType Directory -Path $deployDir -Force | Out-Null
 }
 
-# Stop the previous scheduled task instance.
-$task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-
-if ($task.State -eq "Running") {
-    Stop-ScheduledTask -TaskName $taskName
-
-    for ($i = 0; $i -lt 15; $i++) {
-        Start-Sleep -Seconds 1
-        $task = Get-ScheduledTask -TaskName $taskName
-
-        if ($task.State -ne "Running") {
-            break
-        }
-    }
-}
-
-# Stop only a Java process running this dashboard JAR.
+# Stop the previous dashboard Java process only.
 $javaProcesses = Get-CimInstance Win32_Process |
     Where-Object {
         $_.Name -eq "java.exe" -and
-        $_.CommandLine -like "*-jar cold-chain-dashboard.jar*"
+        $_.CommandLine -like "*cold-chain-dashboard.jar*--server.port=$port*"
     }
 
 foreach ($process in $javaProcesses) {
@@ -46,18 +36,12 @@ foreach ($process in $javaProcesses) {
 
 # Wait for port 8090 to be released.
 $portFree = $false
-
 for ($i = 0; $i -lt 30; $i++) {
-    $listener = Get-NetTCPConnection `
-        -LocalPort $port `
-        -State Listen `
-        -ErrorAction SilentlyContinue
-
+    $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     if (-not $listener) {
         $portFree = $true
         break
     }
-
     Start-Sleep -Seconds 1
 }
 
@@ -65,25 +49,38 @@ if (-not $portFree) {
     throw "Port $port is still in use. Deployment stopped safely."
 }
 
-# Copy the new build artifact.
+# Copy the built artifact into the deployment directory.
 Copy-Item -Path $sourceJar -Destination $targetJar -Force
 Write-Host "Updated deployment JAR."
 
-# Start the application using the working scheduled task.
-Write-Host "Starting scheduled task: $taskName"
-Start-ScheduledTask -TaskName $taskName
+# Launch Java directly, detached from the Jenkins PowerShell process.
+$stdoutLog = Join-Path $deployDir "app.log"
+$stderrLog = Join-Path $deployDir "app-error.log"
 
-# Wait for the health endpoint.
+$process = Start-Process `
+    -FilePath $javaExe `
+    -ArgumentList @("-jar", "`"$targetJar`"", "--server.port=$port") `
+    -WorkingDirectory $deployDir `
+    -RedirectStandardOutput $stdoutLog `
+    -RedirectStandardError $stderrLog `
+    -WindowStyle Hidden `
+    -PassThru
+
+Write-Host "Started dashboard process PID $($process.Id)."
+
+# Verify the application becomes healthy.
 $healthy = $false
-
-for ($i = 0; $i -lt 30; $i++) {
+for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Seconds 3
 
-    try {
-        $response = Invoke-RestMethod `
-            -Uri "http://localhost:$port/health" `
-            -TimeoutSec 3
+    $process.Refresh()
+    if ($process.HasExited) {
+        Get-Content $stderrLog -Tail 40 -ErrorAction SilentlyContinue
+        throw "Dashboard process exited with code $($process.ExitCode). Check $stderrLog"
+    }
 
+    try {
+        $response = Invoke-RestMethod -Uri "http://localhost:$port/health" -TimeoutSec 3
         if ($response.status -eq "UP") {
             $healthy = $true
             break
@@ -95,7 +92,8 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 
 if (-not $healthy) {
-    throw "Deployment health check failed on port $port. Check Task Scheduler history and application logs."
+    Get-Content $stderrLog -Tail 40 -ErrorAction SilentlyContinue
+    throw "Deployment health check failed on port $port."
 }
 
 Write-Host "Deployment successful!"
