@@ -114,6 +114,42 @@ pipeline {
         }
 
         stage('Build Docker Image') {
+            
+        stage('Test Docker from Jenkins') {
+            steps {
+                powershell '''
+                    Write-Host "===== Windows account ====="
+                    whoami
+
+                    Write-Host "===== Docker version ====="
+                    docker version
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Jenkins cannot connect to Docker."
+                    }
+
+                    Write-Host "===== Docker contexts ====="
+                    docker context ls
+
+                    Write-Host "===== Buildx builders ====="
+                    docker buildx ls
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Jenkins cannot list Docker Buildx builders."
+                    }
+
+                    Write-Host "===== Test image build ====="
+                    docker build -t coldchain-jenkins-test .
+                    
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Jenkins could not build a test Docker image."
+                    }
+
+                    Write-Host "Docker test passed."
+                '''
+            }
+        }
+
             steps {
                 powershell '''
                     $ErrorActionPreference = "Stop"
