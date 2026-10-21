@@ -37,6 +37,7 @@ pipeline {
         }
 
         
+        
         stage('Start Test Application') {
             steps {
                 powershell '''
@@ -61,24 +62,30 @@ pipeline {
                         -ErrorAction SilentlyContinue
 
                     if ($existing) {
-                        throw "Port 8091 is already in use. Stop the existing test application first."
+                        throw "Port 8091 is already in use. Stop the existing process first."
                     }
 
-                    # Launch Java through a separate cmd process.
-                    # This prevents Jenkins from waiting on the Java child process.
-                    $command = '""{0}" -jar "{1}" --server.port=8091 1>"{2}" 2>"{3}""' -f `
-                        $java, $jar, $outLog, $errLog
+                    Remove-Item $outLog, $errLog -Force -ErrorAction SilentlyContinue
 
-                    $launcher = Start-Process `
-                        -FilePath "$env:WINDIR\\System32\\cmd.exe" `
-                        -ArgumentList @("/c", "start", '""', "/b", $command) `
+                    $process = Start-Process `
+                        -FilePath $java `
+                        -ArgumentList @("-jar", "`"$jar`"", "--server.port=8091") `
                         -WorkingDirectory $env:WORKSPACE `
+                        -RedirectStandardOutput $outLog `
+                        -RedirectStandardError $errLog `
                         -PassThru
+
+                    Set-Content -Path $pidFile -Value $process.Id
 
                     $healthy = $false
 
                     for ($i = 0; $i -lt 40; $i++) {
                         Start-Sleep -Seconds 3
+                        $process.Refresh()
+
+                        if ($process.HasExited) {
+                            break
+                        }
 
                         try {
                             $response = Invoke-RestMethod `
@@ -91,31 +98,29 @@ pipeline {
                             }
                         }
                         catch {
-                            # The application may still be starting.
+                            # Continue while the application starts.
                         }
                     }
 
                     if (-not $healthy) {
+                        Write-Host "=== Application standard output ==="
                         Get-Content $outLog -ErrorAction SilentlyContinue
+
+                        Write-Host "=== Application standard error ==="
                         Get-Content $errLog -ErrorAction SilentlyContinue
+
+                        if (-not $process.HasExited) {
+                            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                        }
+
                         throw "Test application did not become healthy on port 8091."
                     }
-
-                    $connection = Get-NetTCPConnection `
-                        -LocalPort 8091 -State Listen `
-                        -ErrorAction SilentlyContinue |
-                        Select-Object -First 1
-
-                    if (-not $connection) {
-                        throw "Could not identify the test application process."
-                    }
-
-                    Set-Content -Path $pidFile -Value $connection.OwningProcess
 
                     Write-Host "Test application is healthy on port 8091."
                 '''
             }
         }
+
 
 
         stage('Selenium Continuous Tests') {
