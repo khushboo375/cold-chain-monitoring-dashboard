@@ -232,6 +232,9 @@ pipeline {
 
 
         stage('Deploy Docker Container') {
+            when {
+                expression { return false }
+            }
             steps {
                 powershell '''
                     $ErrorActionPreference = "Stop"
