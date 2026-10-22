@@ -183,11 +183,12 @@ pipeline {
             }
         }
 
+        
         stage('Push Image to Docker Hub') {
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'docker-credential',
+                        credentialsId: 'dockerhub-khushboo375-v2',
                         usernameVariable: 'DOCKERHUB_USER',
                         passwordVariable: 'DOCKERHUB_TOKEN'
                     )
@@ -195,28 +196,40 @@ pipeline {
                     powershell '''
                         $ErrorActionPreference = "Stop"
 
+                        Write-Host "Authenticating to Docker Hub..."
+
                         $env:DOCKERHUB_TOKEN |
-                            docker login --username $env:DOCKERHUB_USER --password-stdin
+                            docker login `
+                                --username $env:DOCKERHUB_USER `
+                                --password-stdin
 
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Docker Hub login failed."
+                            throw "Docker Hub authentication failed. Check the Jenkins credential."
                         }
 
-                        docker push "$env:DOCKER_IMAGE`:$env:BUILD_NUMBER"
+                        Write-Host "Docker Hub authentication succeeded."
+
+                        $versionedImage = "$env:DOCKER_IMAGE`:$env:BUILD_NUMBER"
+                        $latestImage = "$env:DOCKER_IMAGE`:latest"
+
+                        docker push $versionedImage
 
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Pushing the versioned image failed."
+                            throw "Push failed for $versionedImage."
                         }
 
-                        docker push "$env:DOCKER_IMAGE`:latest"
+                        docker push $latestImage
 
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Pushing the latest image failed."
+                            throw "Push failed for $latestImage."
                         }
+
+                        Write-Host "Both image tags pushed successfully."
                     '''
                 }
             }
         }
+
 
         stage('Deploy Docker Container') {
             steps {
